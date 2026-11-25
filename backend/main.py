@@ -214,6 +214,88 @@ def dashboard_data():
     return dashboard.build(TABLE, CROPS, predict_matrix, META, EXCLUDE, NO_OK_LABEL, OK_THRESHOLD, BEST_MIN, CROP_ID)
 
 
+# แหล่งน้ำชลประทานที่ตรวจกับแหล่งอ้างอิงแล้วเท่านั้น (ไม่ครบทุกอำเภอ · Dataset เองไม่มีข้อมูลนี้)
+# อ้างอิง: th.wikipedia.org เขื่อนกิ่วลม/เขื่อนกิ่วคอหมา และ bangkokbiznews.com/pr-news/news/prnews/1259094
+WATER_SOURCES = {
+    "เมืองลำปาง": "แม่น้ำวัง · เขื่อนกิ่วลม (ต.บ้านแลง) · ฝายหลวงสบอาง",
+    "แจ้ห่ม": "เขื่อนกิ่วคอหมา (ต.ปงดอน) บนแม่น้ำวัง · อยู่ในระบบกิ่วลม–กิ่วคอหมา",
+    "ห้างฉัตร": "ระบบส่งน้ำกิ่วลม–กิ่วคอหมา (ครอบคลุม 4 อำเภอ)",
+    "เกาะคา": "ระบบส่งน้ำกิ่วลม–กิ่วคอหมา · ฝายหลวงสบอาง",
+    "แม่ทะ": "ฝายหลวงสบอาง (ส่งน้ำเมืองลำปาง เกาะคา แม่ทะ)",
+}
+
+
+AMPHOE_CODE = {"เมืองลำปาง": "5201", "แม่เมาะ": "5202", "เกาะคา": "5203", "เสริมงาม": "5204", "งาว": "5205", "แจ้ห่ม": "5206",
+               "วังเหนือ": "5207", "เถิน": "5208", "แม่พริก": "5209", "แม่ทะ": "5210", "สบปราบ": "5211", "ห้างฉัตร": "5212", "เมืองปาน": "5213"}
+
+
+def _wq(values: np.ndarray, weights: np.ndarray, q: float) -> float:
+    """ควอนไทล์ถ่วงน้ำหนักด้วยพื้นที่"""
+    ok = ~np.isnan(values)
+    v, w = values[ok], weights[ok]
+    order = np.argsort(v)
+    v, w = v[order], w[order]
+    cum = np.cumsum(w) / w.sum()
+    return float(v[min(np.searchsorted(cum, q), len(v) - 1)])
+
+
+@app.get("/api/districts")
+def districts():
+    """ข้อมูลรายอำเภอจาก Dataset จริง (ค่าเฉลี่ยถ่วงพื้นที่) รูปแบบตรงกับที่หน้าเว็บใช้
+    ไม่มีข้อมูลอุณหภูมิจริง/แหล่งน้ำใน Dataset จึงส่งค่าว่าง (หน้าเว็บจะแสดง 'ยังไม่มีข้อมูล')"""
+    df = TABLE.reset_index(drop=True)
+    P = predict_matrix(df)
+    best = P.argmax(1)
+    best_ok = P.max(1) >= BEST_MIN
+    texture_names = {v: k for k, v in TEXTURE.items()}
+    drain_names = {1: "ระบายน้ำแย่มาก", 2: "ระบายน้ำไม่ดี", 2.5: "ระบายน้ำค่อนข้างไม่ดี", 3: "ระบายน้ำปานกลาง", 4: "ระบายน้ำดี"}
+    fert_names = {1: "ความอุดมสมบูรณ์ต่ำ", 2: "ความอุดมสมบูรณ์ปานกลาง", 3: "ความอุดมสมบูรณ์สูง"}
+    out = []
+    for amphoe, idx in df.groupby("amphoe").groups.items():
+        idx = np.array(list(idx))
+        g = df.loc[idx]
+        w = g["area_rai"].to_numpy(float)
+        if w.sum() <= 0:
+            w = np.ones(len(g))
+        mean = lambda col: float(np.nansum(g[col].to_numpy(float) * w) / w[~np.isnan(g[col].to_numpy(float))].sum())
+        def dominant(col, names):
+            share = g.assign(_w=w).groupby(col)["_w"].sum().sort_values(ascending=False)
+            key = share.index[0]
+            return names.get(key, str(key)), float(share.iloc[0] / share.sum() * 100)
+        slope = mean("slope_mid")
+        zone = "lowland" if slope < 7 else ("foothill" if slope < 12 else "highland")
+        tex, tex_pct = dominant("tex_top_ord", texture_names)
+        drain, drain_pct = dominant("drainage_ord", drain_names)
+        fert, _ = dominant("fertility_ord", fert_names)
+        ph = g["pH_top_mid"].to_numpy(float)
+        rain = float(g["rain_annual_mean"].iloc[0])
+        area_best = {}
+        for j in np.unique(best[idx][best_ok[idx]]):
+            m = (best[idx] == j) & best_ok[idx]
+            area_best[CROPS[j]] = float(w[m].sum())
+        top = sorted(area_best.items(), key=lambda kv: -kv[1])[:4]
+        total = float(w.sum())
+        out.append({
+            "code": AMPHOE_CODE.get(amphoe, ""), "name": amphoe, "zone": zone,
+            "terrain": f"ความลาดชันเฉลี่ย {slope:.1f}% · ความลึกดินเฉลี่ย {mean('depth_mid'):.0f} ซม.",
+            "soil": f"เนื้อดินบนส่วนใหญ่ {tex} ({tex_pct:.0f}% ของพื้นที่) · {fert}",
+            "ph": f"{mean('pH_top_mid'):.1f} (ส่วนใหญ่ {_wq(ph, w, .1):.1f}–{_wq(ph, w, .9):.1f})",
+            "drain": f"{drain} ({drain_pct:.0f}% ของพื้นที่)",
+            "temp": f"≈{mean('temp_rule'):.1f}°C เฉลี่ยทั้งปี (ประมาณจากข้อมูลความสูง ไม่ใช่ค่าที่วัดจริง)",
+            "water": ((WATER_SOURCES[amphoe] + " · " if amphoe in WATER_SOURCES else "ยังไม่ได้ตรวจแหล่งน้ำชลประทานของอำเภอนี้ · ")
+                      + f"ฝนหน้าฝน ≈{float(g['rain_wet'].iloc[0]):,.0f} มม. หน้าแล้ง ≈{float(g['rain_dry'].iloc[0]):,.0f} มม."),
+            "rain": f"≈{rain:,.0f} มม./ปี · แล้ง {mean('dry_months'):.0f} เดือน",
+            "crops": [c for c, _ in top],
+            "tip": ("จัดอันดับจากคะแนนของโมเดลที่เรียนกฎ FAO EcoCrop/กรมพัฒนาที่ดิน (พื้นที่ที่แต่ละพืชได้คะแนนสูงสุด: "
+                    + ", ".join(f"{c} {a / total * 100:.0f}%" for c, a in top)
+                    + ") ไม่ใช่ผลผลิตจริง ควรตรวจสอบกับสำนักงานเกษตรอำเภอ"),
+            "source": "backend/data/modeling_table.csv",
+        })
+    out.sort(key=lambda r: r["code"])
+    return {"districts": out, "count": len(out), "source": "modeling_table.csv"}
+
+
+
 @app.get("/api/model/info")
 def model_info():
     return {
