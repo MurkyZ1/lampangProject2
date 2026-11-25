@@ -1,0 +1,4 @@
+storage/
+.env
+model.joblib
+__pycache__/
