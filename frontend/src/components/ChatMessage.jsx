@@ -1,3 +1,5 @@
+import { Sprout } from 'lucide-react';
+
 // Markdown พื้นฐานที่แสดงผลด้วย React node (ไม่ใช้ innerHTML จึง escape ข้อความโดยอัตโนมัติ)
 function renderInline(value) {
   return String(value).split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g).map((part, idx) => {
@@ -25,8 +27,12 @@ function MessageBody({ content }) {
     : <p key={i}>{renderInline(chunk.text)}</p>);
 }
 
+export function AiAvatar({ online = false }) {
+  return <span className={`ai-av ${online ? 'is-online' : ''}`} aria-hidden="true"><Sprout /></span>;
+}
+
 export default function ChatMessage({ message }) {
   return message.role === 'user'
     ? <div className="m u"><div className="b">{message.content}</div></div>
-    : <div className="m a"><span className="ai-av" aria-hidden="true" /><div className="b"><MessageBody content={message.content} /></div></div>;
+    : <div className="m a"><AiAvatar /><div className="b"><MessageBody content={message.content} /></div></div>;
 }

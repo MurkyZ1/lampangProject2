@@ -20,10 +20,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import base64
+
 from fastapi import APIRouter, Body, Header, Request
+from fastapi.responses import FileResponse
 
 STORE_FILE = Path(os.getenv("COMMUNITY_DATA_FILE", Path(__file__).parent / "storage" / "community.json"))
 _lock = threading.RLock()
+UPLOAD_DIR = Path(os.getenv("COMMUNITY_UPLOAD_DIR", STORE_FILE.parent / "uploads"))
+AVATAR_DIR = Path(os.getenv("COMMUNITY_AVATAR_DIR", STORE_FILE.parent / "avatars"))
+MAX_IMAGES = 3
+MAX_IMAGE_BYTES = 2 * 1024 * 1024  # ต่อรูป (หน้าเว็บย่อรูปก่อนส่งแล้ว)
 
 
 class ApiError(Exception):
@@ -89,8 +96,15 @@ def _hash_token(t: str) -> str:
     return hashlib.sha256(t.encode()).hexdigest()
 
 
+def _avatar_url(u: Optional[dict]) -> Optional[str]:
+    name = (u or {}).get("avatar")
+    return f"/api/auth/avatars/{name}" if isinstance(name, str) and name else None
+
+
 def _public_user(u: dict) -> dict:
-    return {"id": u["id"], "name": u["name"], "email": u["email"], "role": u["role"]}
+    # hasPassword = False สำหรับบัญชีที่สมัครผ่าน Google (ยังไม่มีรหัสผ่านให้เปลี่ยน)
+    return {"id": u["id"], "name": u["name"], "email": u["email"], "role": u["role"],
+            "avatar": _avatar_url(u), "hasPassword": bool(u.get("passwordHash"))}
 
 
 def authenticated(authorization: Optional[str]) -> dict:
@@ -191,9 +205,61 @@ TYPES = ["อัปเดตการปลูก", "ดินแห้ง", "�
 STATUSES = ["pending", "approved", "rejected"]
 
 
-def _public_report(r: dict) -> dict:
+def _image_urls(r: dict) -> list:
+    return [f"/api/community/images/{n}" for n in (r.get("images") or []) if isinstance(n, str)]
+
+
+def _public_report(r: dict, avatars: Optional[dict] = None) -> dict:
     keys = ("id", "displayName", "district", "tambon", "village", "crop", "kind", "message", "createdAt", "fieldStatus", "updatedAt")
-    return {k: r.get(k) for k in keys}
+    out = {k: r.get(k) for k in keys}
+    out["isLocal"] = r.get("isLocal")          # None = รายงานเก่าที่ไม่มีข้อมูลนี้
+    out["images"] = _image_urls(r)
+    out["authorAvatar"] = (avatars or {}).get(r.get("userId"))
+    return out
+
+
+def _avatar_map(db: dict) -> dict:
+    return {u["id"]: _avatar_url(u) for u in db["users"] if u.get("avatar")}
+
+
+# รูปที่แนบ: รับเป็น data URL (JSON) ตรวจชนิดไฟล์จาก magic bytes แล้วเก็บเป็นไฟล์ใน storage/uploads
+_IMAGE_TYPES = {"image/jpeg": ("jpg", (b"\xff\xd8\xff",)), "image/png": ("png", (b"\x89PNG\r\n\x1a\n",)), "image/webp": ("webp", (b"RIFF",))}
+_IMAGE_NAME = re.compile(r"[0-9a-f]{32}\.(jpg|png|webp)")
+
+
+def _decode_images(raw) -> list:
+    if raw in (None, []):
+        return []
+    if not isinstance(raw, list) or len(raw) > MAX_IMAGES:
+        raise ApiError(400, f"แนบรูปได้ไม่เกิน {MAX_IMAGES} รูป")
+    out = []
+    for item in raw:
+        m = re.fullmatch(r"data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)", item) if isinstance(item, str) else None
+        if not m:
+            raise ApiError(400, "ไฟล์รูปไม่ถูกต้อง (รองรับ JPG, PNG, WebP)")
+        try:
+            data = base64.b64decode(m.group(2), validate=True)
+        except ValueError:
+            raise ApiError(400, "ไฟล์รูปเสียหาย")
+        ext, magics = _IMAGE_TYPES[m.group(1)]
+        if len(data) > MAX_IMAGE_BYTES:
+            raise ApiError(400, "รูปมีขนาดใหญ่เกินไป")
+        if not any(data.startswith(x) for x in magics) or (ext == "webp" and data[8:12] != b"WEBP"):
+            raise ApiError(400, "ไฟล์ที่แนบไม่ใช่รูปภาพ")
+        out.append((ext, data))
+    return out
+
+
+def _save_images(images: list) -> list:
+    if not images:
+        return []
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    names = []
+    for ext, data in images:
+        name = f"{uuid.uuid4().hex}.{ext}"
+        (UPLOAD_DIR / name).write_bytes(data)
+        names.append(name)
+    return names
 
 
 def _validate_report(b: dict) -> dict:
@@ -207,7 +273,11 @@ def _validate_report(b: dict) -> dict:
     if (not district or len(district) > 80 or len(tambon) > 80 or len(village) > 80 or len(crop) > 80
             or kind not in TYPES or len(message) < 5 or len(message) > 1200):
         raise ApiError(400, "กรุณาระบุอำเภอ ประเภทรายงาน และรายละเอียด 5–1200 ตัวอักษร")
-    return {"district": district, "tambon": tambon, "village": village, "crop": crop, "kind": kind, "message": message}
+    is_local = b.get("isLocal")
+    if is_local is not None and not isinstance(is_local, bool):
+        raise ApiError(400, "ข้อมูลคนในพื้นที่ไม่ถูกต้อง")
+    return {"district": district, "tambon": tambon, "village": village, "crop": crop, "kind": kind, "message": message,
+            "isLocal": bool(is_local)}
 
 
 @router.post("/api/auth/register", status_code=201)
@@ -303,12 +373,131 @@ def logout(authorization: Optional[str] = Header(None)):
     return {"ok": True}
 
 
+# ───────────── โปรไฟล์ผู้ใช้ (ชื่อที่แสดง / รูปโปรไฟล์ / รหัสผ่าน) ─────────────
+# ทุก endpoint ใช้ user id จากโทเคนที่ตรวจแล้วเท่านั้น จึงแก้ได้เฉพาะบัญชีของตัวเอง · อีเมลเปลี่ยนไม่ได้
+_NAME_OK = re.compile(r"[A-Za-z0-9\u0E00-\u0E7F .\-_]+")
+MAX_AVATAR_BYTES = 2 * 1024 * 1024
+_AVATAR_NAME = re.compile(r"[0-9a-f]{32}\.(jpg|png|webp)")
+
+
+def _norm_name(name: str) -> str:
+    return re.sub(r"\s+", " ", name).strip().casefold()
+
+
+def _session_user(db: dict, authorization: Optional[str]) -> dict:
+    """คืน dict ผู้ใช้ตัวจริงใน db (ใช้แก้ไขข้อมูล) จากโทเคนที่ผ่านการตรวจแล้ว"""
+    me = authenticated(authorization)
+    user = next((u for u in db["users"] if u["id"] == me["id"]), None)
+    if not user:
+        raise ApiError(401, "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่")
+    return user
+
+
+@router.patch("/api/auth/profile")
+def update_profile(body: dict = Body(...), authorization: Optional[str] = Header(None)):
+    authenticated(authorization)                     # ตรวจสิทธิ์ก่อนตรวจข้อมูลเสมอ
+    name = re.sub(r"\s+", " ", str(body.get("name") or "")).strip()
+    if not 2 <= len(name) <= 80:
+        raise ApiError(400, "ชื่อต้องยาว 2–80 ตัวอักษร")
+    if not _NAME_OK.fullmatch(name):
+        raise ApiError(400, "ชื่อใช้ได้เฉพาะภาษาไทย ภาษาอังกฤษ ตัวเลข เว้นวรรค และ . - _")
+    with _lock:
+        db = _read()
+        user = _session_user(db, authorization)
+        if any(u["id"] != user["id"] and _norm_name(u.get("name", "")) == _norm_name(name) for u in db["users"]):
+            raise ApiError(409, "ชื่อนี้มีผู้ใช้งานแล้ว กรุณาเลือกชื่ออื่น")
+        if name != user["name"]:
+            user["name"] = name
+            user["updatedAt"] = _now()
+            for r in db["reports"]:              # ชื่อบนรายงานเดิมของผู้ใช้คนนี้ (ผูกด้วย userId)
+                if r.get("userId") == user["id"]:
+                    r["displayName"] = name
+            _write(db)
+    return {"user": _public_user(user), "message": "บันทึกชื่อเรียบร้อยแล้ว"}
+
+
+@router.post("/api/auth/avatar")
+def upload_avatar(body: dict = Body(...), authorization: Optional[str] = Header(None)):
+    authenticated(authorization)
+    decoded = _decode_images([body.get("image")])
+    ext, data = decoded[0]
+    if len(data) > MAX_AVATAR_BYTES:
+        raise ApiError(400, "รูปโปรไฟล์ต้องมีขนาดไม่เกิน 2 MB")
+    AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+    name = f"{uuid.uuid4().hex}.{ext}"
+    (AVATAR_DIR / name).write_bytes(data)
+    with _lock:
+        db = _read()
+        user = _session_user(db, authorization)
+        old = user.get("avatar")
+        user["avatar"] = name
+        user["updatedAt"] = _now()
+        _write(db)
+    if old and _AVATAR_NAME.fullmatch(old):
+        (AVATAR_DIR / old).unlink(missing_ok=True)
+    return {"user": _public_user(user), "message": "เปลี่ยนรูปโปรไฟล์เรียบร้อยแล้ว"}
+
+
+@router.delete("/api/auth/avatar")
+def delete_avatar(authorization: Optional[str] = Header(None)):
+    with _lock:
+        db = _read()
+        user = _session_user(db, authorization)
+        old = user.pop("avatar", None)
+        user["updatedAt"] = _now()
+        _write(db)
+    if old and _AVATAR_NAME.fullmatch(old):
+        (AVATAR_DIR / old).unlink(missing_ok=True)
+    return {"user": _public_user(user), "message": "ลบรูปโปรไฟล์แล้ว"}
+
+
+@router.get("/api/auth/avatars/{name}")
+def avatar_file(name: str):
+    if not _AVATAR_NAME.fullmatch(name) or not (AVATAR_DIR / name).is_file():
+        raise ApiError(404, "ไม่พบรูป")
+    media = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}[name.rsplit(".", 1)[1]]
+    return FileResponse(AVATAR_DIR / name, media_type=media,
+                        headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"})
+
+
+@router.post("/api/auth/password")
+def change_password(request: Request, body: dict = Body(...), authorization: Optional[str] = Header(None)):
+    _limit(request)
+    authenticated(authorization)                     # ตรวจสิทธิ์ก่อนตรวจข้อมูลเสมอ
+    current, new = body.get("currentPassword"), body.get("newPassword")
+    if not isinstance(new, str) or not 8 <= len(new) <= 128:
+        raise ApiError(400, "รหัสผ่านใหม่ต้องยาว 8–128 ตัวอักษร")
+    with _lock:
+        db = _read()
+        user = _session_user(db, authorization)
+    if not user.get("passwordHash"):
+        raise ApiError(400, "บัญชีนี้เข้าสู่ระบบด้วย Google จึงไม่มีรหัสผ่านให้เปลี่ยน")
+    if not isinstance(current, str) or not verify_password(current, user["passwordHash"]):
+        raise ApiError(400, "รหัสผ่านปัจจุบันไม่ถูกต้อง")
+    if verify_password(new, user["passwordHash"]):
+        raise ApiError(400, "รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านเดิม")
+    new_hash = hash_password(new)
+    token = secrets.token_hex(32)
+    expiry = int(time.time() * 1000) + 7 * 86400000
+    with _lock:
+        db = _read()
+        user = next(u for u in db["users"] if u["id"] == user["id"])
+        user["passwordHash"] = new_hash
+        user["updatedAt"] = _now()
+        # ออกจากระบบทุกอุปกรณ์ของบัญชีนี้ แล้วออกโทเคนใหม่ให้เครื่องที่เปลี่ยนรหัส
+        db["sessions"] = [s for s in db["sessions"] if s["userId"] != user["id"]]
+        db["sessions"].append({"tokenHash": _hash_token(token), "userId": user["id"], "expiry": expiry})
+        _write(db)
+    return {"token": token, "user": _public_user(user), "message": "เปลี่ยนรหัสผ่านเรียบร้อยแล้ว อุปกรณ์อื่นถูกออกจากระบบ"}
+
+
 @router.get("/api/community/posts")
 def public_posts():
     with _lock:
         db = _read()
     posts = sorted((r for r in db["reports"] if r.get("moderation") == "approved"), key=lambda r: r["createdAt"], reverse=True)
-    return {"posts": [_public_report(r) for r in posts]}
+    avatars = _avatar_map(db)
+    return {"posts": [_public_report(r, avatars) for r in posts]}
 
 
 @router.get("/api/community/mine")
@@ -317,13 +506,16 @@ def my_posts(authorization: Optional[str] = Header(None)):
     with _lock:
         db = _read()
     mine = sorted((r for r in db["reports"] if r.get("userId") == user["id"]), key=lambda r: r["createdAt"], reverse=True)
-    return {"posts": [{**_public_report(r), "moderation": r.get("moderation"), "adminNote": r.get("adminNote", "")} for r in mine]}
+    avatars = _avatar_map(db)
+    return {"posts": [{**_public_report(r, avatars), "moderation": r.get("moderation"), "adminNote": r.get("adminNote", "")} for r in mine]}
 
 
 @router.post("/api/community/posts", status_code=201)
 def create_post(body: dict = Body(...), authorization: Optional[str] = Header(None)):
     user = authenticated(authorization)
     fields = _validate_report(body)
+    images = _decode_images(body.get("images"))
+    fields["images"] = _save_images(images)
     now = _now()
     report = {"id": str(uuid.uuid4()), "userId": user["id"], "displayName": user["name"], **fields,
               "moderation": "pending", "fieldStatus": "รอตรวจสอบโดยผู้ดูแล", "adminNote": "", "createdAt": now, "updatedAt": now}
@@ -339,7 +531,21 @@ def admin_reports(authorization: Optional[str] = Header(None)):
     require_admin(authorization)
     with _lock:
         db = _read()
-    return {"reports": [{k: v for k, v in r.items() if k != "userId"} for r in reversed(db["reports"])]}
+    avatars = _avatar_map(db)
+    return {"reports": [{**{k: v for k, v in r.items() if k != "userId"}, "images": _image_urls(r), "authorAvatar": avatars.get(r.get("userId"))}
+                        for r in reversed(db["reports"])]}
+
+
+@router.get("/api/community/images/{name}")
+def report_image(name: str):
+    """รูปที่แนบกับรายงาน (ชื่อไฟล์สุ่ม เดาไม่ได้ · ตรวจรูปแบบชื่อเพื่อกัน path traversal)"""
+    if not _IMAGE_NAME.fullmatch(name):
+        raise ApiError(404, "ไม่พบรูป")
+    path = UPLOAD_DIR / name
+    if not path.is_file():
+        raise ApiError(404, "ไม่พบรูป")
+    media = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}[name.rsplit(".", 1)[1]]
+    return FileResponse(path, media_type=media, headers={"Cache-Control": "public, max-age=604800", "X-Content-Type-Options": "nosniff"})
 
 
 @router.patch("/api/admin/reports/{report_id}")

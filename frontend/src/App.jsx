@@ -1,27 +1,36 @@
-import {useCallback,useEffect,useRef,useState} from 'react';
+import {Suspense,lazy,useCallback,useEffect,useRef,useState} from 'react';
 import SiteHeader from './components/SiteHeader';
 import Hero from './components/Hero';
 import MapSection from './components/MapSection';
 import ChatPopup from './components/ChatPopup';
-import SoilPage from './pages/SoilPage';
-import CropsPage from './pages/CropsPage';
-import DashboardPage from './pages/DashboardPage';
-import LimitationsPage from './pages/LimitationsPage';
-import CommunityPage from './pages/CommunityPage';
-import AuthPage from './pages/AuthPage';
-import AdminPage from './pages/AdminPage';
+import HomeServices from './components/HomeServices';
+import SiteFooter from './components/SiteFooter';
+import {SkeletonCards} from './components/ui/Skeleton';
+import useReveal from './hooks/useReveal';
 import {communityRequest,storeToken,token} from './services/communityApi';
 import useAgricultureData from './hooks/useAgricultureData';
 import {DEMO_DISTRICTS} from './data/districts';
 import {isDemoData,loadDistricts} from './services/districtService';
 import {getChatReply} from './services/chatService';
 
-const routes=new Set(['/','/soil','/crops','/dashboard','/limitations','/community','/auth','/admin']);
+// Code splitting: หน้าที่ไม่ใช่หน้าแรกโหลดเมื่อเปิดใช้งานจริง
+const SoilPage=lazy(()=>import('./pages/SoilPage'));
+const CropsPage=lazy(()=>import('./pages/CropsPage'));
+const DashboardPage=lazy(()=>import('./pages/DashboardPage'));
+const LimitationsPage=lazy(()=>import('./pages/LimitationsPage'));
+const CommunityPage=lazy(()=>import('./pages/CommunityPage'));
+const AuthPage=lazy(()=>import('./pages/AuthPage'));
+const AdminPage=lazy(()=>import('./pages/AdminPage'));
+const ProfilePage=lazy(()=>import('./pages/ProfilePage'));
+function PageFallback(){return <div className="wrap page-loading"><SkeletonCards count={3}/></div>;}
+
+const routes=new Set(['/','/soil','/crops','/dashboard','/limitations','/community','/auth','/admin','/profile']);
 const currentPath=()=>routes.has(window.location.pathname)?window.location.pathname:'/';
 function readStored(key,fallback){try{const value=window.localStorage.getItem(key);return value?JSON.parse(value):fallback;}catch{return fallback;}}
 
 export default function App(){
   const [path,setPath]=useState(currentPath);
+  useReveal();
   const [cropToShow,setCropToShow]=useState(null);
   const [user,setUser]=useState(null);
   const [approvedReports,setApprovedReports]=useState([]);
@@ -62,9 +71,12 @@ export default function App(){
   },[selected,districts]);
   const askAboutDistrict=(d,t)=>{setSelected(d.code);setPopupOpen(true);sendMessage(t?`ตำบล${t.tambon} อำเภอ${d.th} มีข้อมูลสภาพดินและคำแนะนำการเพาะปลูกอย่างไร (กรุณาแยกข้อมูลที่ยืนยันแล้วออกจากข้อมูลทั่วไป)`: `ที่อำเภอ${d.th} ควรปลูกอะไรดี และต้องเตรียมดินอย่างไร`,d.code);};
   return <>
+    <a className="skip-link" href="#main-content">ข้ามไปยังเนื้อหา</a>
     <SiteHeader path={path} user={user} onLogout={logout} onNavigate={navigate} onOpenChat={()=>setPopupOpen(true)}/>
-    <main id="main-content">
-      {path==='/'&&<><Hero districts={districts} onOpenChat={()=>setPopupOpen(true)}/>{dataError&&<div className="wrap"><div className="data-error" role="alert">ไม่สามารถโหลดข้อมูลอำเภอ: {dataError}</div></div>}<MapSection districts={districts} selected={selected} onSelect={setSelected} onAsk={askAboutDistrict} tambons={tambons} reports={approvedReports} onCrop={cropId=>navigate('/crops',cropId)} onNavigate={navigate}/><section className="wrap home-more"><div><span className="panel-kicker">สำรวจข้อมูลเพิ่ม</span><h2>จากแผนที่ สู่การตัดสินใจปลูก</h2><p>เข้าไปดูข้อมูลตำบล วิเคราะห์คุณสมบัติดิน และเปรียบเทียบข้อมูลการเกษตร</p></div><div className="home-more-links"><button onClick={()=>navigate('/soil')}>วิเคราะห์ดิน ↗</button><button onClick={()=>navigate('/dashboard')}>Dashboard ↗</button></div></section></>}
+    <main id="main-content" className={path==='/'?'main main--home':'main'}>
+      <div className="page-transition" key={path}>
+      {path==='/'&&<><Hero districts={districts} onOpenChat={()=>setPopupOpen(true)} onNavigate={navigate}/>{dataError&&<div className="wrap"><div className="alert alert--error" role="alert">ไม่สามารถโหลดข้อมูลอำเภอ: {dataError}</div></div>}<MapSection districts={districts} selected={selected} onSelect={setSelected} onAsk={askAboutDistrict} tambons={tambons} reports={approvedReports} onCrop={cropId=>navigate('/crops',cropId)} onNavigate={navigate}/><HomeServices onNavigate={navigate} onOpenChat={()=>setPopupOpen(true)}/></>}
+      <Suspense fallback={<PageFallback/>}>
       {path==='/soil'&&<SoilPage tambons={tambons} status={status} onNavigate={navigate} onOpenChat={()=>setPopupOpen(true)}/>}
       {path==='/crops'&&<CropsPage selectedCrop={cropToShow} onNavigate={navigate}/>}
       {path==='/dashboard'&&<DashboardPage tambons={tambons} stats={stats} status={status} onImport={importFile}/>}
@@ -72,8 +84,11 @@ export default function App(){
       {path==='/community'&&<CommunityPage tambons={tambons} user={user} onNavigate={navigate}/>}
       {path==='/auth'&&<AuthPage onAuth={setUser} onNavigate={navigate}/>}
       {path==='/admin'&&<AdminPage user={user} onNavigate={navigate}/>}
+      {path==='/profile'&&<ProfilePage user={user} onUserChange={setUser} onNavigate={navigate}/>}
+      </Suspense>
+      </div>
     </main>
-    <footer><div className="wrap foot"><div>ลำปาง · ปลูกดี — เครื่องมือวางแผนการปลูกเบื้องต้น</div><div>ข้อมูลตัวอย่าง/รายงานผู้ใช้ต้องตรวจสอบก่อนนำไปใช้งานจริง</div></div></footer>
+    <SiteFooter onNavigate={navigate}/>
     <ChatPopup open={popupOpen} onOpen={()=>setPopupOpen(true)} onClose={()=>setPopupOpen(false)} selected={selected} districts={districts} onSelect={setSelected} history={history} busy={busy} onSend={sendMessage}/>
   </>;
 }

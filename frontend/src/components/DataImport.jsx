@@ -1,4 +1,5 @@
 import {useRef,useState} from 'react';
+import {FileDown,Upload} from 'lucide-react';
 export default function DataImport({kind,onImport,compact=false}){
   const input=useRef(null);
   const [result,setResult]=useState('');const [busy,setBusy]=useState(false);const [error,setError]=useState('');
@@ -10,11 +11,11 @@ export default function DataImport({kind,onImport,compact=false}){
     finally{setBusy(false);e.target.value='';}
   }
   return <div className={`import-panel ${compact?'import-panel--compact':''}`}>
-    <div><strong>มี Data ของตัวเองแล้ว?</strong><p>นำเข้าไฟล์ CSV (UTF-8) หรือ JSON เพื่อแสดงข้อมูลจริงในหน้าเว็บนี้</p></div>
+    <span className="import-icon" aria-hidden="true"><Upload/></span><div><strong>มี Data ของตัวเองแล้ว?</strong><p>นำเข้าไฟล์ CSV (UTF-8) หรือ JSON เพื่อแสดงข้อมูลจริงในหน้าเว็บนี้</p></div>
     <div className="import-actions">
       <input ref={input} className="sr-only" type="file" accept=".csv,.json,text/csv,application/json" onChange={load} aria-label="เลือกไฟล์ข้อมูล" />
-      <button type="button" className="btn btn-g" disabled={busy} onClick={()=>input.current?.click()}>{busy?'กำลังนำเข้า…':'นำเข้าข้อมูล'}</button>
-      <a href={`/templates/${kind==='tambons'?'tambons':'crop-stats'}-template.csv`} download className="template-link">ตัวอย่างคอลัมน์ ↗</a>
+      <button type="button" className={`btn btn-g btn-sm ${busy?'is-loading':''}`} disabled={busy} onClick={()=>input.current?.click()}><Upload aria-hidden="true"/>{busy?'กำลังนำเข้า…':'นำเข้าข้อมูล'}</button>
+      <a href={`/templates/${kind==='tambons'?'tambons':'crop-stats'}-template.csv`} download className="link-btn"><FileDown aria-hidden="true"/>ตัวอย่างคอลัมน์</a>
     </div>
     {result&&<p role="status" className="feedback-success">{result}</p>}
     {error&&<p role="alert" className="feedback-error">{error}</p>}

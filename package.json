@@ -6,6 +6,7 @@
     "dev:frontend": "npm --prefix frontend run dev",
     "dev:backend": "cd backend && python3 -m uvicorn main:app --port 8000",
     "build": "npm --prefix frontend run build",
-    "map:download": "node scripts/download-lampang-boundaries.mjs"
+    "map:download": "node scripts/download-lampang-boundaries.mjs",
+    "images:download": "node scripts/download-images.mjs"
   }
 }
