@@ -35,7 +35,7 @@ export default function App(){
   const [user,setUser]=useState(null);
   const [approvedReports,setApprovedReports]=useState([]);
   useEffect(()=>{if(path==='/')communityRequest('/community/posts').then(r=>setApprovedReports(r.posts||[])).catch(()=>setApprovedReports([]));},[path]);
-  useEffect(()=>{if(token())communityRequest('/auth/me').then(data=>setUser(data.user)).catch(()=>setUser(null));},[]);
+  useEffect(()=>{if(token())communityRequest('/auth/me').then(data=>setUser(data.user)).catch(()=>{storeToken('');setUser(null);});},[]);
   const logout=async()=>{try{await communityRequest('/auth/logout','POST');}catch{}storeToken('');setUser(null);navigate('/');};
   const {tambons,stats,status,importFile}=useAgricultureData();
   const [districts,setDistricts]=useState(isDemoData?DEMO_DISTRICTS:[]);
@@ -51,6 +51,14 @@ export default function App(){
   useEffect(()=>{let mounted=true;loadDistricts().then(data=>{if(mounted){setDistricts(data);setDataError('');}}).catch(e=>{if(mounted)setDataError(e.message);});return()=>{mounted=false;};},[]);
   useEffect(()=>{if(selected)window.localStorage.setItem('lp_sel_react',JSON.stringify(selected));else window.localStorage.removeItem('lp_sel_react');},[selected]);
   useEffect(()=>{window.localStorage.setItem('lp_chat_react',JSON.stringify(history.slice(-30)));historyRef.current=history;},[history]);
+  // ประวัติแชตเป็นของบัญชีนั้น ๆ: เมื่อสลับบัญชี/ล็อกอิน/ล็อกเอาต์ ให้ล้างบทสนทนาเก่า ไม่ให้คนถัดไปเห็น
+  useEffect(()=>{
+    if(token()&&!user)return; // กำลังตรวจว่าใครล็อกอินอยู่ รอก่อน
+    const owner=user?String(user.id??user.email??user.username??'user'):'guest';
+    let stored=null;try{stored=window.localStorage.getItem('lp_chat_owner');}catch{}
+    if(stored!==null&&stored!==owner){historyRef.current=[];setHistory([]);try{window.localStorage.removeItem('lp_chat_react');}catch{}}
+    try{window.localStorage.setItem('lp_chat_owner',owner);}catch{}
+  },[user]);
   const navigate=useCallback((to,cropId)=>{
     if(!routes.has(to))return;
     if(to!==window.location.pathname)window.history.pushState({},'',to);

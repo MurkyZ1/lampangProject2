@@ -2,19 +2,51 @@ import { useEffect, useRef, useState } from 'react';
 import ChatMessage from './ChatMessage';
 import { ArrowUp, Sparkles, X } from 'lucide-react';
 import { isDemoChat } from '../services/chatService';
+<<<<<<< HEAD
 import { AiAvatar } from './ChatMessage';
+=======
+import { loadTambonNames } from '../services/modelService';
+>>>>>>> 0c60c3230034a64bbf98c68f2d9bf94242830283
 
-const SUGGESTIONS = [
-  ['ดินแบบไหนเหมาะกับลำไย', 'อำเภอไหนในลำปางเหมาะปลูกลำไยที่สุด'],
-  ['ปลูกอะไรดีหน้าแล้ง', 'ช่วงฤดูแล้งในลำปางควรปลูกพืชอะไร'],
-  ['ปรับปรุงดินลูกรัง', 'ดินลูกรังความอุดมสมบูรณ์ต่ำ ควรปรับปรุงอย่างไร'],
-  ['กาแฟบนที่สูง', 'อยากปลูกกาแฟในลำปาง ควรเลือกอำเภอไหนและเริ่มอย่างไร'],
+// พืชทั้ง 10 ชนิดของโมเดล (ชื่อตรงกับ backend)
+const CROP_NAMES = ['ข้าวนาปี', 'ข้าวโพดเลี้ยงสัตว์', 'มันสำปะหลัง', 'มะม่วง', 'สับปะรด', 'กระเทียม', 'ถั่วเหลือง', 'ลำไย', 'อ้อยโรงงาน', 'กาแฟอาราบิกา'];
+
+// ปุ่มคำถาม: สร้างข้อความจากอำเภอ/ตำบล/พืชที่เลือก (needs = ต้องเลือกอะไรก่อน)
+const QUESTIONS = [
+  { key: 'plant', label: 'ปลูกอะไรดี', needs: [],
+    text: ({ a, t }) => (t ? `ตำบล${t} อำเภอ${a} ปลูกพืชอะไรดี` : a ? `อำเภอ${a} ปลูกพืชอะไรดี` : 'ทั้งจังหวัดลำปาง พืชอะไรเหมาะที่สุด') },
+  { key: 'soil', label: 'ดินและฝน', needs: ['อำเภอ'], text: ({ a }) => `ดินและฝนที่อำเภอ${a}เป็นอย่างไร` },
+  { key: 'where', label: 'พืชนี้เหมาะที่ไหน', needs: ['พืช'], text: ({ c }) => `${c}เหมาะกับอำเภอไหนมากที่สุด` },
+  { key: 'fit', label: 'พืชนี้ในพื้นที่ฉัน', needs: ['อำเภอ', 'พืช'], text: ({ a, t, c }) => `${c}เหมาะกับ${t ? `ตำบล${t} อำเภอ${a}` : `อำเภอ${a}`}แค่ไหน` },
+  { key: 'all', label: 'ภาพรวมทั้งจังหวัด', needs: [], text: () => 'ทั้งจังหวัดลำปาง พืชอะไรเหมาะที่สุด' },
+  { key: 'limit', label: 'ลำไย อ้อย กาแฟ', needs: [], text: () => 'ทำไมลำไย อ้อย กาแฟ ถึงไม่มีพื้นที่ผ่านเกณฑ์' },
+  { key: 'trust', label: 'เชื่อถือได้แค่ไหน', needs: [], text: () => 'ผลจากระบบนี้เชื่อถือได้แค่ไหน' },
 ];
 
 export default function ChatBox({ popup = false, open = false, onClose, selected, districts, onSelect, history, busy, onSend }) {
   const [draft, setDraft] = useState('');
   const scroller = useRef(null);
   const areaRef = useRef(null);
+  const [tambon, setTambon] = useState('');
+  const [crop, setCrop] = useState('');
+  const [tambonList, setTambonList] = useState([]);
+  const [quickOpen, setQuickOpen] = useState(false);
+  const district = districts.find((d) => d.code === selected);
+  const amphoe = district?.th || '';
+
+  // เปลี่ยนอำเภอ → ล้างตำบลที่เลือก แล้วโหลดรายชื่อตำบลของอำเภอนั้น
+  useEffect(() => {
+    setTambon('');
+    setTambonList([]);
+    if (!amphoe) return undefined;
+    let alive = true;
+    loadTambonNames(amphoe).then((list) => { if (alive) setTambonList(list); }).catch(() => { if (alive) setTambonList([]); });
+    return () => { alive = false; };
+  }, [amphoe]);
+
+  const pick = { a: amphoe, t: tambon, c: crop };
+  const missing = (q) => q.needs.filter((n) => (n === 'อำเภอ' ? !amphoe : !crop));
+  const ask = (q) => { if (!busy && !missing(q).length) onSend(q.text(pick)); };
 
   useEffect(() => {
     if (scroller.current) scroller.current.scrollTo({ top: scroller.current.scrollHeight, behavior: 'smooth' });
@@ -52,15 +84,55 @@ export default function ChatBox({ popup = false, open = false, onClose, selected
           {!history.length && !busy ? <div className="welcome">
             <span className="welcome-icon" aria-hidden="true"><Sparkles /></span>
             <h3>วันนี้อยากปลูกอะไรดี?</h3>
+<<<<<<< HEAD
             <p>ถามเรื่องสภาพดิน อากาศ หรือวิธีปลูกในแต่ละอำเภอของลำปาง</p>
             <div className="sugs">{SUGGESTIONS.map(([title, prompt], i) => <button type="button" style={{ '--i': i }} className="sug" key={title} disabled={busy} onClick={() => onSend(prompt)}>
               <b>{title}</b><span>{prompt}</span>
             </button>)}</div>
+=======
+            <p>ถามเรื่องดิน ฝน และพืชที่เหมาะในแต่ละอำเภอของลำปาง</p>
+            <p className="welcome-hint">เลือกอำเภอ ตำบล หรือพืช แล้วกดคำถามด้านล่างได้เลย</p>
+>>>>>>> 0c60c3230034a64bbf98c68f2d9bf94242830283
           </div> : <>
             {history.map((msg) => <ChatMessage key={msg.id} message={msg} />)}
             {busy && <div className="m a" role="status" aria-label="ผู้ช่วยกำลังพิมพ์"><AiAvatar /><div className="b"><span className="typing"><i /><i /><i /></span></div></div>}
           </>}
         </div>
+      </div>
+      <div className="quick">
+        <button type="button" className="quick-toggle" onClick={() => setQuickOpen((v) => !v)} aria-expanded={quickOpen}>
+          <span>💡 เลือกคำถาม · อำเภอ · ตำบล · พืช</span>
+          <span className="quick-caret" aria-hidden="true">{quickOpen ? 'ซ่อน ▾' : 'เปิด ▴'}</span>
+        </button>
+        {quickOpen && <>
+          <div className="quick-pick">
+            <label>อำเภอ
+              <select value={selected || ''} onChange={(e) => onSelect(e.target.value || null)}>
+                <option value="">ทั้งจังหวัด</option>
+                {districts.map((d) => <option key={d.code} value={d.code}>{d.th}</option>)}
+              </select>
+            </label>
+            <label>ตำบล
+              <select value={tambon} onChange={(e) => setTambon(e.target.value)} disabled={!amphoe || !tambonList.length}>
+                <option value="">{amphoe ? 'ทั้งอำเภอ' : 'เลือกอำเภอก่อน'}</option>
+                {tambonList.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </label>
+            <label>พืช
+              <select value={crop} onChange={(e) => setCrop(e.target.value)}>
+                <option value="">ยังไม่เลือก</option>
+                {CROP_NAMES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+          </div>
+          <div className="quick-qs">
+            {QUESTIONS.map((q) => {
+              const m = missing(q);
+              return <button type="button" key={q.key} className="quick-q" disabled={busy || m.length > 0}
+                title={m.length ? `เลือก${m.join('และ')}ก่อน` : q.text(pick)} onClick={() => ask(q)}>{q.label}</button>;
+            })}
+          </div>
+        </>}
       </div>
       <form className="composer" onSubmit={submit}>
         <div className="comp">
