@@ -351,3 +351,19 @@
 .hist-num small{display:block;font-size:.64rem;color:var(--ink-3)}
 .hist-intro{margin:10px 0 0;color:var(--ink-2);font-size:.9rem}
 .hist{height:220px}
+/* ตัวช่วยเลือกคำถามในแชต (อยู่ถาวรเหนือช่องพิมพ์) */
+.quick{padding:6px 24px 0;border-top:1px solid var(--line)}
+.pop .quick{padding:6px 14px 0}
+.quick{padding-top:10px;padding-bottom:6px}
+.quick-toggle{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;padding:10px 14px;font:inherit;font-size:14px;font-weight:700;color:var(--green-d,#1f5f35);background:var(--green-l);border:1.5px solid var(--green);border-radius:12px;cursor:pointer;transition:background .15s,box-shadow .15s}
+.quick-toggle:hover{box-shadow:0 2px 8px rgba(40,120,70,.22)}
+.quick-caret{font-size:12px;font-weight:600;padding:2px 9px;border-radius:99px;background:var(--green);color:#fff;white-space:nowrap}
+.quick-pick{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:4px 0 8px}
+.quick-pick label{display:grid;gap:3px;font-size:11.5px;color:var(--ink-3)}
+.quick-pick select{width:100%;min-width:0;font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink)}
+.quick-pick select:disabled{opacity:.55}
+.quick-qs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px}
+.quick-q{font:inherit;font-size:12.5px;padding:6px 11px;border:1px solid var(--line);border-radius:99px;background:var(--paper);color:var(--ink);cursor:pointer}
+.quick-q:hover:not(:disabled){border-color:var(--green);background:var(--green-l)}
+.quick-q:disabled{opacity:.45;cursor:not-allowed}
+.welcome-hint{margin-top:18px;color:var(--ink-3);font-size:13.5px}

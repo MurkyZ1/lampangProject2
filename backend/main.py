@@ -215,13 +215,17 @@ def dashboard_data():
 
 
 # แหล่งน้ำชลประทานที่ตรวจกับแหล่งอ้างอิงแล้วเท่านั้น (ไม่ครบทุกอำเภอ · Dataset เองไม่มีข้อมูลนี้)
-# อ้างอิง: th.wikipedia.org เขื่อนกิ่วลม/เขื่อนกิ่วคอหมา และ bangkokbiznews.com/pr-news/news/prnews/1259094
+# อ้างอิง: th.wikipedia.org เขื่อนกิ่วลม/เขื่อนกิ่วคอหมา, bangkokbiznews.com/pr-news/news/prnews/1259094,
+#          dailynews.co.th/news/149177 (แม่ทะ แม่ทาน แม่อาบ), lovethailand.org (แม่มอก), prachachat.net/local-economy/news-1370180 (แม่ปาน)
 WATER_SOURCES = {
-    "เมืองลำปาง": "แม่น้ำวัง · เขื่อนกิ่วลม (ต.บ้านแลง) · ฝายหลวงสบอาง",
+    "เมืองลำปาง": "แม่น้ำวัง · เขื่อนกิ่วลม (ต.บ้านแลง) · ฝายหลวงสบอาง · อ่างเก็บน้ำแม่ทะ (ต.พระบาท)",
     "แจ้ห่ม": "เขื่อนกิ่วคอหมา (ต.ปงดอน) บนแม่น้ำวัง · อยู่ในระบบกิ่วลม–กิ่วคอหมา",
     "ห้างฉัตร": "ระบบส่งน้ำกิ่วลม–กิ่วคอหมา (ครอบคลุม 4 อำเภอ)",
     "เกาะคา": "ระบบส่งน้ำกิ่วลม–กิ่วคอหมา · ฝายหลวงสบอาง",
     "แม่ทะ": "ฝายหลวงสบอาง (ส่งน้ำเมืองลำปาง เกาะคา แม่ทะ)",
+    "สบปราบ": "อ่างเก็บน้ำแม่ทาน (ต.แม่กัวะ)",
+    "เถิน": "อ่างเก็บน้ำแม่มอก (ต.เวียงมอก) · อ่างเก็บน้ำแม่อาบ (ต.นาโป่ง)",
+    "เมืองปาน": "อ่างเก็บน้ำแม่ปาน (ต.เมืองปาน) อยู่ระหว่างเตรียมก่อสร้าง ยังไม่ใช่แหล่งน้ำปัจจุบัน",
 }
 
 
@@ -438,9 +442,8 @@ def tambon_suitability(amphoe: str = Query(...), tambon: str = Query(...)):
             "areaRai": round(float(sub["area_rai"].sum()), 1), "recommendations": ranked, "caveat": CAVEAT}
 
 
-@app.post("/api/chat")
-def chat(payload: dict):
-    """ตอบแชตแบบอิงโมเดล: ถ้าข้อความมีชื่ออำเภอ จะสรุปพืชแนะนำจากโมเดลของอำเภอนั้น"""
+def _rule_chat(payload: dict):
+    """สำรอง (ไม่ใช้ AI) ตอบแชตแบบอิงโมเดล: ถ้าข้อความมีชื่ออำเภอ จะสรุปพืชแนะนำจากโมเดลของอำเภอนั้น"""
     msg = str(payload.get("message", "")).strip()
     if not msg:
         raise HTTPException(400, "message ว่าง")
@@ -454,3 +457,105 @@ def chat(payload: dict):
     r = rank((P * w[:, None]).sum(0), 3)
     lines = "\n".join(f"- {x['crop']}: {x['score']:.2f} ({x['label']})" for x in r)
     return {"reply": f"**อำเภอ{a} — พืชที่โมเดลให้คะแนนสูงสุด 3 อันดับ (เฉลี่ยถ่วงพื้นที่)**\n{lines}\n\n*{CAVEAT}*"}
+
+
+# ---------- เครื่องมือให้ AI เรียก (ข้อมูลจริงจากโมเดล/ตาราง) ----------
+def _pick_amphoe(name: str) -> str:
+    name = str(name).replace("อำเภอ", "").strip()
+    for a in AMPHOE_RAIN.index:
+        if a == name or name in a or a in name:
+            return a
+    raise ValueError(f"ไม่พบอำเภอ '{name}' มีเฉพาะ: {', '.join(AMPHOE_RAIN.index)}")
+
+
+def _pick_crop(name: str) -> str:
+    name = str(name).strip()
+    for c in CROPS:
+        if c == name or name in c or c in name:
+            return c
+    raise ValueError(f"ไม่มีพืช '{name}' ในโมเดล มีเฉพาะ: {', '.join(CROPS)}")
+
+
+def _t_district_info(amphoe: str) -> dict:
+    a = _pick_amphoe(amphoe)
+    d = next(x for x in districts()["districts"] if x["name"] == a)
+    return {k: d[k] for k in ("name", "zone", "terrain", "soil", "ph", "drain", "rain", "temp", "water", "crops")} | {"note": CAVEAT}
+
+
+def _weighted_scores(df: pd.DataFrame) -> np.ndarray:
+    P = predict_matrix(df.reset_index(drop=True))
+    w = df["area_rai"].to_numpy(float)
+    w = w / w.sum() if w.sum() > 0 else np.full(len(df), 1 / len(df))
+    return (P * w[:, None]).sum(0)
+
+
+def _t_rank_crops(amphoe: str, tambon: Optional[str] = None) -> dict:
+    a = _pick_amphoe(amphoe)
+    df = TABLE[TABLE.amphoe == a]
+    where = f"อำเภอ{a}"
+    if tambon:
+        t = str(tambon).replace("ตำบล", "").strip()
+        sub = df[df.tambon == t]
+        if sub.empty:
+            raise ValueError(f"ไม่พบตำบล '{t}' ใน{where} ตำบลที่มี: {', '.join(sorted(df.tambon.unique()))}")
+        df, where = sub, f"ตำบล{t} {where}"
+    ranked = rank(_weighted_scores(df), 5)
+    return {"area": where, "top": [{"crop": r["crop"], "score": round(r["score"], 2), "label": r["label"],
+                                    "judgeable": r["crop"] not in NO_OK_LABEL} for r in ranked],
+            "note": CAVEAT}
+
+
+def _t_where_crop(crop: str) -> dict:
+    c = _pick_crop(crop)
+    j = CROPS.index(c)
+    rows = []
+    for a in AMPHOE_RAIN.index:
+        df = TABLE[TABLE.amphoe == a].reset_index(drop=True)
+        P = predict_matrix(df)
+        w = df["area_rai"].to_numpy(float)
+        w = w / w.sum()
+        rows.append({"amphoe": a, "score": round(float((P[:, j] * w).sum()), 2),
+                     "areaSuitablePct": round(float(((P[:, j] >= OK_THRESHOLD) * w).sum() * 100), 1)})
+    rows.sort(key=lambda r: -r["score"])
+    return {"crop": c, "judgeable": c not in NO_OK_LABEL, "byAmphoe": rows, "note": CAVEAT}
+
+
+def _t_province() -> dict:
+    import dashboard
+    f = dashboard.build(TABLE, CROPS, predict_matrix, META, EXCLUDE, NO_OK_LABEL, OK_THRESHOLD, BEST_MIN, CROP_ID)["final"]
+    return {"bestCropAreaPct": [{"crop": r["crop"], "pct": r["pct"]} for r in f["bestCropArea"]],
+            "suitableAreaPct": [{"crop": r["crop"], "pct": r["pct"], "judgeable": r["judgeable"]} for r in f["suitableShare"]],
+            "note": f["caveat"]}
+
+
+def _t_list_tambons(amphoe: str) -> dict:
+    a = _pick_amphoe(amphoe)
+    return {"amphoe": a, "tambons": sorted(TABLE[TABLE.amphoe == a].tambon.unique().tolist())}
+
+
+TOOL_IMPL = {"get_district_info": _t_district_info, "rank_crops": _t_rank_crops, "where_is_crop_suitable": _t_where_crop,
+             "province_summary": _t_province, "list_tambons": _t_list_tambons}
+
+
+@app.post("/api/chat")
+def chat(payload: dict, request: Request):
+    """แชต: ใช้ AI (Groq) เรียบเรียงคำตอบจากเครื่องมือของระบบ ถ้าใช้ AI ไม่ได้ จะถอยไปใช้ระบบเดิม (จับชื่ออำเภอ)"""
+    import llm_chat
+    msg = str(payload.get("message", "")).strip()
+    if not msg:
+        raise HTTPException(400, "message ว่าง")
+    if len(msg) > llm_chat.MAX_MESSAGE_CHARS:
+        raise HTTPException(400, f"ข้อความยาวเกิน {llm_chat.MAX_MESSAGE_CHARS} ตัวอักษร")
+    if llm_chat.enabled():
+        # หลัง proxy (เช่น Render) ใช้ IP จริงจาก X-Forwarded-For ถ้ามี
+        fwd = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        client = fwd or (request.client.host if request.client else "unknown")
+        if not llm_chat.check_rate(client):
+            raise HTTPException(429, "ถามถี่เกินไป รอสักครู่แล้วลองใหม่")
+        try:
+            return {"reply": llm_chat.answer(msg, payload.get("history") or [], TOOL_IMPL), "mode": "ai"}
+        except llm_chat.LLMUnavailable as e:
+            print(f"[chat] AI ใช้ไม่ได้ ({e}) → ใช้ระบบสำรอง")
+    out = _rule_chat(payload)
+    out["mode"] = "rule"
+    return out

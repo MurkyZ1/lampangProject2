@@ -15,3 +15,9 @@ export const loadModelOptions = () => call('/api/model/options');
 
 /** GET /api/dashboard — ข้อมูลหน้า Dashboard (eda + final) */
 export const loadDashboard = () => call('/api/dashboard');
+
+/** GET /api/tambons?amphoe= — รายชื่อตำบลของอำเภอ (ใช้กับตัวช่วยเลือกคำถามในแชต) */
+export const loadTambonNames = async (amphoe) => {
+  const data = await call(`/api/tambons?amphoe=${encodeURIComponent(amphoe)}`);
+  return [...new Set((data.tambons || []).map((t) => t.tambon))].sort((a, b) => a.localeCompare(b, 'th'));
+};
